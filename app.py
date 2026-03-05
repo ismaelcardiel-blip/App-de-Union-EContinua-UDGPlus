@@ -17,7 +17,7 @@ def mostrar_encabezado():
     col1, col2 = st.columns([1, 5])
     
     # Ruta al logo según tu estructura de repositorio
-    logo_path = "assets/logo_u.png"
+    logo_path = "logo_u.png"
     
     with col1:
         if os.path.exists(logo_path):
