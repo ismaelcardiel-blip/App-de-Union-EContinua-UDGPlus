@@ -16,19 +16,23 @@ st.set_page_config(
 def mostrar_encabezado():
     col1, col2 = st.columns([1, 5])
     
-    # Ruta al logo según tu estructura de repositorio
-    logo_path = "logo_u.png"
-    
+    # Intentamos buscar el logo en dos ubicaciones posibles
+    if os.path.exists("assets/logo_u.png"):
+        logo = "assets/logo_u.png"
+    elif os.path.exists("logo_u.png"):
+        logo = "logo_u.png"
+    else:
+        logo = None
+
     with col1:
-        if os.path.exists(logo_path):
-            st.image(logo_path, width=150)
+        if logo:
+            st.image(logo, width=150)
         else:
-            # Fallback en caso de que el archivo no se encuentre en la ruta
-            st.warning("Logo no encontrado")
+            st.warning("⚠️ Verificar archivo logo_u.png")
             
     with col2:
         st.title("Plataforma de Procesamiento de Datos y Documentos")
-        st.subheader("Universidad de Guadalajara")
+        st.subheader("Unidad de Educación Continua Virtual y Campus Digital Comunitario UDGPlus")
 
     # Aviso de Privacidad Integrado
     with st.expander("⚖️ Aviso de Privacidad (UdeG)"):
@@ -44,7 +48,7 @@ def mostrar_encabezado():
 
 # --- LÓGICA: UNIÓN TABULAR ---
 def seccion_tabular():
-    st.header("1️⃣ Unión de Archivos Tabulados (Estilo QGIS Join)")
+    st.header("1️⃣ Unión de Archivos Tabulados")
     st.write("Carga dos archivos para realizar una unión basada en un campo común (Atribute Join).")
     
     col_a, col_b = st.columns(2)
