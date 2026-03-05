@@ -1,4 +1,4 @@
-`![Logo UdeG](assets/logo_u.png)`
+`![Logo UdeG](logo_u.png)`
 Markdown
 # 📊 Herramienta de Unión de Datos y Documentos (UDGPlus Educación Continua)
 
