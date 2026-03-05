@@ -1,6 +1,6 @@
 `![Logo UdeG](assets/logo_u.png)`
 Markdown
-# 📊 Herramienta de Unión de Datos y Documentos (UdeG)
+# 📊 Herramienta de Unión de Datos y Documentos (UDGPlus Educación Continua)
 
 Esta aplicación web ha sido diseñada para facilitar el procesamiento de información tabular y la gestión de documentos digitales. Inspirada en la lógica de **Join Attributes** de sistemas de información geográfica como **QGIS**, permite a investigadores, académicos y profesionales realizar cruces de bases de datos y combinar archivos PDF/imágenes sin necesidad de software especializado.
 
