@@ -146,7 +146,7 @@ def main():
 
     with tab_inicio:
         st.markdown("""
-        ### 🎓 Bienvenido a la Plataforma de Procesamiento UDGPlus
+        ### 🎓 Bienvenido a la Plataforma de Unión de datos de Educación Continua UDGPlus
         Esta herramienta ha sido diseñada para facilitar tareas administrativas comunes de forma segura y eficiente.
         
         #### ¿Qué puedes hacer aquí?
