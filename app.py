@@ -16,19 +16,20 @@ st.set_page_config(
 def mostrar_encabezado():
     col1, col2 = st.columns([1, 5])
     
-    # Intentamos buscar el logo en dos ubicaciones posibles
-    if os.path.exists("assets/logo_u.png"):
-        logo = "assets/logo_u.png"
-    elif os.path.exists("logo_u.png"):
-        logo = "logo_u.png"
-    else:
-        logo = None
+    # Esta lista busca el logo en diferentes lugares posibles
+    posibles_rutas = ["assets/logo_u.png", "logo_u.png", "logo_u.png.png"]
+    logo_final = None
+    
+    for ruta in posibles_rutas:
+        if os.path.exists(ruta):
+            logo_final = ruta
+            break
 
     with col1:
-        if logo:
-            st.image(logo, width=150)
+        if logo_final:
+            st.image(logo_final, width=150)
         else:
-            st.warning("⚠️ Verificar archivo logo_u.png")
+            st.warning("Logo no encontrado")
             
     with col2:
         st.title("Plataforma de Procesamiento de Datos y Documentos")
