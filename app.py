@@ -16,7 +16,7 @@ st.set_page_config(
 def mostrar_encabezado():
     col1, col2 = st.columns([1, 5])
     
-    # Esta lista busca el logo en diferentes lugares posibles
+    # Búsqueda flexible del logo
     posibles_rutas = ["assets/logo_u.png", "logo_u.png", "logo_u.png.png"]
     logo_final = None
     
@@ -49,44 +49,40 @@ def mostrar_encabezado():
 
 # --- LÓGICA: UNIÓN TABULAR ---
 def seccion_tabular():
-    st.header("1️⃣ Unión de Archivos Tabulados")
-    st.write("Carga dos archivos para realizar una unión basada en un campo común (Atribute Join).")
+    st.header("📑 Unión de Archivos Tabulados")
+    st.write("Carga dos archivos para realizar una unión basada en un campo común (similar a Join en QGIS).")
     
     col_a, col_b = st.columns(2)
     
     with col_a:
-        file_1 = st.file_uploader("Archivo Base (Capa destino)", type=['csv', 'xlsx'])
+        file_1 = st.file_uploader("1. Archivo Base (Capa destino)", type=['csv', 'xlsx'], help="Este es el archivo principal al que quieres agregarle datos.")
     with col_b:
-        file_2 = st.file_uploader("Archivo a Unir (Capa origen)", type=['csv', 'xlsx'])
+        file_2 = st.file_uploader("2. Archivo a Unir (Capa origen)", type=['csv', 'xlsx'], help="De este archivo se extraerá la información nueva.")
 
     if file_1 and file_2:
-        # Carga de datos con detección de formato
         df1 = pd.read_csv(file_1) if file_1.name.endswith('.csv') else pd.read_excel(file_1)
         df2 = pd.read_csv(file_2) if file_2.name.endswith('.csv') else pd.read_excel(file_2)
 
         st.info(f"Registros detectados: Base ({len(df1)}) | A unir ({len(df2)})")
         
         c1, c2 = st.columns(2)
-        key_1 = c1.selectbox("Campo Llave en Base:", df1.columns)
-        key_2 = c2.selectbox("Campo Llave en Unión:", df2.columns)
+        key_1 = c1.selectbox("¿Cuál es la columna común en la Base?", df1.columns)
+        key_2 = c2.selectbox("¿Cuál es la columna común en el segundo archivo?", df2.columns)
         
-        # Selección de columnas (excluyendo la llave para no duplicar)
         available_cols = [c for c in df2.columns if c != key_2]
-        cols_to_add = st.multiselect("Selecciona las columnas que deseas agregar:", available_cols)
+        cols_to_add = st.multiselect("¿Qué columnas nuevas quieres añadir a tu base?", available_cols)
         
-        if st.button("Ejecutar Unión de Atributos"):
+        if st.button("🚀 Ejecutar Unión de Datos"):
             if not cols_to_add:
                 st.warning("Por favor selecciona al menos una columna para añadir.")
             else:
-                # Lógica de Join
                 df2_subset = df2[[key_2] + cols_to_add]
                 resultado = pd.merge(df1, df2_subset, left_on=key_1, right_on=key_2, how='left')
                 
-                st.success("¡Unión completada!")
-                st.subheader("Previsualización (primeros 10 registros):")
+                st.success("¡Unión completada con éxito!")
+                st.subheader("Previsualización del resultado:")
                 st.dataframe(resultado.head(10))
                 
-                # Preparar descarga
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     resultado.to_excel(writer, index=False)
@@ -100,27 +96,27 @@ def seccion_tabular():
 
 # --- LÓGICA: UNIÓN DOCUMENTOS ---
 def seccion_documentos():
-    st.header("2️⃣ Combinar PDF e Imágenes")
-    st.write("Los archivos se combinarán en el orden exacto en que los selecciones.")
+    st.header("📂 Combinar PDF e Imágenes")
+    st.write("Selecciona varios archivos para unirlos en un solo PDF final.")
     
     uploaded_files = st.file_uploader(
-        "Carga archivos (PDF, JPG, PNG)", 
+        "Carga tus archivos aquí (PDF, JPG, PNG)", 
         type=['pdf', 'jpg', 'png', 'jpeg'], 
-        accept_multiple_files=True
+        accept_multiple_files=True,
+        help="Los archivos se unirán en el orden en que aparecen en esta lista."
     )
     
     if uploaded_files:
-        nombre_final = st.text_input("Nombre del PDF final:", "documento_unificado_udg.pdf")
+        nombre_final = st.text_input("Nombre para tu nuevo archivo:", "documento_unificado_udg.pdf")
         
-        if st.button("Generar PDF Combinado"):
+        if st.button("🪄 Generar PDF Unificado"):
             merger = PdfWriter()
             
-            with st.spinner("Procesando archivos..."):
+            with st.spinner("Creando tu documento..."):
                 for uploaded_file in uploaded_files:
                     if uploaded_file.type == "application/pdf":
                         merger.append(uploaded_file)
                     else:
-                        # Procesamiento de imagen
                         image = Image.open(uploaded_file).convert("RGB")
                         img_pdf = io.BytesIO()
                         image.save(img_pdf, format="PDF")
@@ -129,7 +125,7 @@ def seccion_documentos():
                 output_pdf = io.BytesIO()
                 merger.write(output_pdf)
                 
-                st.success("¡Documento generado con éxito!")
+                st.success("¡Documento generado!")
                 st.download_button(
                     label="📥 Descargar PDF Final",
                     data=output_pdf.getvalue(),
@@ -141,20 +137,39 @@ def seccion_documentos():
 def main():
     mostrar_encabezado()
     
-    st.divider()
-    opcion = st.sidebar.radio(
-        "Menú de Herramientas", 
-        ["Unir Tablas (Join)", "Combinar Documentos"]
-    )
+    # Creación de pestañas para una navegación más amigable
+    tab_inicio, tab_tablas, tab_docs = st.tabs([
+        "🏠 Inicio", 
+        "📑 Unión de Tablas", 
+        "📂 Combinar Archivos"
+    ])
 
-    if opcion == "Unir Tablas (Join)":
+    with tab_inicio:
+        st.markdown("""
+        ### 🎓 Bienvenido a la Plataforma de Procesamiento UDGPlus
+        Esta herramienta ha sido diseñada para facilitar tareas administrativas comunes de forma segura y eficiente.
+        
+        #### ¿Qué puedes hacer aquí?
+        1. **Unir Tablas:** Si tienes dos archivos de Excel y necesitas cruzar información (como poner nombres a una lista de códigos).
+        2. **Combinar Archivos:** Si tienes varios PDFs o fotos de documentos y necesitas enviarlos como un solo archivo.
+        
+        ---
+        **Instrucciones rápidas:**
+        * Selecciona una de las pestañas de arriba para comenzar.
+        * Tus archivos **nunca se guardan en el servidor**, la privacidad está garantizada.
+        * Al terminar, simplemente cierra la pestaña del navegador.
+        """)
+        
+    with tab_tablas:
         seccion_tabular()
-    else:
+
+    with tab_docs:
         seccion_documentos()
 
-    # Footer institucional
-    st.sidebar.divider()
-    st.sidebar.caption("Herramienta desarrollada para uso institucional. © 2024 UdeG.")
+    # Footer en la barra lateral
+    st.sidebar.markdown("---")
+    st.sidebar.caption("Herramienta institucional © 2024 UdeG.")
+    st.sidebar.info("Para reportar fallas, contacta al administrador del sistema.")
 
 if __name__ == "__main__":
     main()
