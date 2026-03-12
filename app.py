@@ -33,15 +33,36 @@ def conectar_google(nombre_archivo):
         st.error(f"Error de conexión: {e}")
         return None
 
-def realizar_cruce(df_base, df_nuevo, id_base, id_nuevo, columnas):
-    # Unión de datos (Left Join)
-    res = pd.merge(df_base, df_nuevo[[id_nuevo] + columnas], 
-                   left_on=id_base, right_on=id_nuevo, how='left')
-    # Eliminar la columna ID duplicada si tienen nombres distintos
-    if id_base != id_nuevo and id_nuevo in res.columns:
-        res = res.drop(columns=[id_nuevo])
-    # Limpieza de valores nulos para visualización y guardado
-    return res.astype(str).replace(['nan', 'NaN', 'None', '<NA>'], '')
+def realizar_cruce_inteligente(df_base, df_nuevo, id_base, id_nuevo, columnas_a_cruzar):
+    """
+    Une los datos y, si la columna ya existe en la base, 
+    llena los huecos en lugar de crear una columna duplicada.
+    """
+    # 1. Aseguramos que los IDs sean strings para evitar fallos de coincidencia
+    df_base[id_base] = df_base[id_base].astype(str)
+    df_nuevo[id_nuevo] = df_nuevo[id_nuevo].astype(str)
+
+    # 2. Hacemos el merge temporal
+    temp_merge = pd.merge(df_base, df_nuevo[[id_nuevo] + columnas_a_cruzar], 
+                          left_on=id_base, right_on=id_nuevo, how='left', suffixes=('', '_NUEVO'))
+
+    # 3. Lógica de "rellenado": Si la columna ya existía, pasamos los datos del merge a la original
+    for col in columnas_a_cruzar:
+        col_nueva = f"{col}_NUEVO"
+        if col_nueva in temp_merge.columns:
+            # Rellenamos los vacíos de la columna original con los datos de la columna nueva
+            # Si la columna original no existía, esto simplemente la crea correctamente
+            if col in df_base.columns:
+                # Convertimos a string y reemplazamos vacíos reales
+                temp_merge[col] = temp_merge[col].astype(str).replace(['nan', 'NaN', 'None', '', '<NA>'], pd.NA)
+                temp_merge[col] = temp_merge[col].fillna(temp_merge[col_nueva])
+                temp_merge = temp_merge.drop(columns=[col_nueva])
+    
+    # Limpiamos columna de ID duplicada si existe
+    if id_base != id_nuevo and id_nuevo in temp_merge.columns:
+        temp_merge = temp_merge.drop(columns=[id_nuevo])
+
+    return temp_merge.astype(str).replace(['nan', 'NaN', 'None', '<NA>'], '')
 
 # --- INTERFAZ ---
 st.title("📊 Plataforma de Datos UDGPlus")
@@ -55,7 +76,7 @@ with tab1:
     st.header("Sincronización con Google Drive")
     st.info(f"Base vinculada: **{SHEET_BASE_NOMBRE}**")
     
-    archivo_nuevo_g = st.file_uploader("Subir datos nuevos para añadir a Drive:", type=['xlsx', 'csv'], key="up_g_final")
+    archivo_nuevo_g = st.file_uploader("Subir datos nuevos:", type=['xlsx', 'csv'], key="up_g_v3")
     
     if archivo_nuevo_g:
         with st.spinner("Conectando con Drive..."):
@@ -66,72 +87,49 @@ with tab1:
                 
                 if not df_drive.empty:
                     c1, c2 = st.columns(2)
-                    id_d = c1.selectbox("Columna ID en Drive:", df_drive.columns, key="sel_id_d")
-                    id_s_g = c2.selectbox("Columna ID en archivo nuevo:", df_subido_g.columns, key="sel_id_sg")
+                    id_d = c1.selectbox("Columna ID en Drive:", df_drive.columns, key="id_d_v3")
+                    id_s_g = c2.selectbox("Columna ID en archivo nuevo:", df_subido_g.columns, key="id_s_v3")
                     
-                    cols_g = st.multiselect("Columnas a añadir a la nube:", 
-                                           [c for c in df_subido_g.columns if c != id_s_g], key="m_cols_g")
+                    cols_g = st.multiselect("Columnas a actualizar/añadir:", 
+                                           [c for c in df_subido_g.columns if c != id_s_g], key="cols_g_v3")
                     
-                    if st.button("🚀 Actualizar Google Sheets", key="btn_g_final"):
+                    if st.button("🚀 Actualizar Google Sheets", key="btn_g_v3"):
                         if not cols_g:
-                            st.warning("Selecciona al menos una columna.")
+                            st.warning("Selecciona columnas.")
                         else:
-                            with st.spinner("Actualizando hoja..."):
-                                resultado_g = realizar_cruce(df_drive, df_subido_g, id_d, id_s_g, cols_g)
+                            with st.spinner("Actualizando datos..."):
+                                resultado_g = realizar_cruce_inteligente(df_drive, df_subido_g, id_d, id_s_g, cols_g)
                                 
-                                # Subida de datos
                                 datos_lista = [resultado_g.columns.tolist()] + resultado_g.values.tolist()
                                 sheet.clear()
                                 sheet.update('A1', datos_lista)
                                 
-                                st.success("✅ Base en Drive actualizada correctamente.")
+                                st.success("✅ Base en Drive actualizada (datos insertados en sus columnas correspondientes).")
                                 st.balloons()
                                 st.dataframe(resultado_g.head(10))
-                else:
-                    st.error("La base en Drive no tiene datos.")
 
 # --- PESTAÑA 2: UNIÓN LOCAL ---
 with tab2:
     st.header("Cruce de archivos locales")
-    st.write("Une dos archivos y descarga el resultado sin afectar a Drive.")
-    
     col_a, col_b = st.columns(2)
-    f_base_l = col_a.file_uploader("Archivo Base (Destino):", type=['xlsx', 'csv'], key="up_l_base")
-    f_nuevo_l = col_b.file_uploader("Archivo con nuevos datos:", type=['xlsx', 'csv'], key="up_l_nuevo")
+    f_base_l = col_a.file_uploader("Archivo Base:", type=['xlsx', 'csv'], key="up_l_b_v3")
+    f_nuevo_l = col_b.file_uploader("Datos Nuevos:", type=['xlsx', 'csv'], key="up_l_n_v3")
     
     if f_base_l and f_nuevo_l:
         df_l_base = pd.read_csv(f_base_l) if f_base_l.name.endswith('.csv') else pd.read_excel(f_base_l)
         df_l_nuevo = pd.read_csv(f_nuevo_l) if f_nuevo_l.name.endswith('.csv') else pd.read_excel(f_nuevo_l)
         
         c1, c2 = st.columns(2)
-        id_l_b = c1.selectbox("ID en Base:", df_l_base.columns, key="sel_id_lb")
-        id_l_n = c2.selectbox("ID en Datos Nuevos:", df_l_nuevo.columns, key="sel_id_ln")
+        id_l_b = c1.selectbox("ID Base:", df_l_base.columns, key="id_lb_v3")
+        id_l_n = c2.selectbox("ID Nuevo:", df_l_nuevo.columns, key="id_ln_v3")
+        cols_l = st.multiselect("Columnas a cruzar:", [c for c in df_l_nuevo.columns if c != id_l_n], key="cols_l_v3")
         
-        cols_l = st.multiselect("Columnas a añadir:", 
-                               [c for c in df_l_nuevo.columns if c != id_l_n], key="m_cols_l")
-        
-        if st.button("🚀 Procesar Unión Local", key="btn_l_final"):
-            if not cols_l:
-                st.warning("Selecciona al menos una columna.")
-            else:
-                resultado_l = realizar_cruce(df_l_base, df_l_nuevo, id_l_b, id_l_n, cols_l)
-                
-                st.success("Cruce realizado. Previsualización:")
-                st.dataframe(resultado_l.head(10))
-                
-                # Preparar descarga
-                output = io.BytesIO()
-                with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    resultado_l.to_excel(writer, index=False)
-                
-                st.download_button(
-                    label="📥 Descargar Resultado en Excel",
-                    data=output.getvalue(),
-                    file_name="union_local_udg.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-
-st.sidebar.markdown("---")
-st.sidebar.caption("© 2026 UDGPlus - Educación Continua")
+        if st.button("🚀 Procesar Unión Local", key="btn_l_v3"):
+            resultado_l = realizar_cruce_inteligente(df_l_base, df_l_nuevo, id_l_b, id_l_n, cols_l)
+            st.dataframe(resultado_l.head(10))
+            
+            output = io.BytesIO()
+            with pd.ExcelWriter(output) as writer: resultado_l.to_excel(writer, index=False)
+            st.download_button("📥 Descargar Excel", output.getvalue(), "resultado_udg.xlsx")
 st.sidebar.markdown("---")
 st.sidebar.caption("UDGPlus - Unidad de Educación Continua")
