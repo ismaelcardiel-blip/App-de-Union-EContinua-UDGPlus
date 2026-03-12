@@ -23,37 +23,37 @@ def conectar_google_sheets(nombre_archivo):
     try:
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         
-        # 1. Obtener credenciales (Prioridad Secrets)
+        # 1. Intentar conectar usando los Secrets de Streamlit
         if "google_creds" in st.secrets:
             creds_dict = dict(st.secrets["google_creds"])
+            # Limpieza de la llave privada (algunas veces los saltos de línea \n fallan en Secrets)
+            if "private_key" in creds_dict:
+                creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         elif os.path.exists('credentials.json'):
             creds = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
         else:
-            st.error("❌ No hay credenciales configuradas.")
+            st.error("❌ No se encontraron credenciales en 'Secrets' ni archivo local.")
             return None
             
-        # 2. Autorizar cliente
         client = gspread.authorize(creds)
         
-        # 3. Intentar abrir el archivo
+        # 2. Intentar abrir el archivo con manejo de errores específico
         try:
             spreadsheet = client.open(nombre_archivo)
             return spreadsheet.get_worksheet(0)
+        except gspread.exceptions.SpreadsheetNotFound:
+            st.error(f"❌ Error: No se encontró el archivo '{nombre_archivo}' en Drive.")
+            st.info(f"Asegúrate de haber compartido el archivo con: **{creds_dict.get('client_email', 'tu correo de cuenta de servicio')}** como Editor.")
+            return None
         except Exception as e:
-            # Si el error es el código 200, reintentamos la apertura directamente
-            if "200" in str(e):
+            # Si el error contiene "200", intentamos un bypass rápido
+            if "200" in str(e) or "Response [200]" in str(e):
                 return client.open(nombre_archivo).get_worksheet(0)
-            st.error(f"❌ Error al abrir el archivo: {e}")
+            st.error(f"❌ Error de permisos o lectura: {e}")
             return None
             
     except Exception as e:
-        # Doble validación para el error Response 200
-        if "200" in str(e):
-            try:
-                client = gspread.authorize(creds)
-                return client.open(nombre_archivo).get_worksheet(0)
-            except: pass
         st.error(f"❌ Error crítico de conexión: {e}")
         return None
 
@@ -62,7 +62,7 @@ def crear_respaldo(sheet_obj):
         client = sheet_obj.client
         fecha = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
         nombre_copia = f"{SHEET_BASE_NOMBRE}_BACKUP_{fecha}"
-        # Copiar el archivo completo en Drive
+        # Copia el archivo usando la API de Drive
         client.copy(sheet_obj.spreadsheet.id, title=nombre_copia)
         return True, nombre_copia
     except Exception as e:
@@ -92,19 +92,18 @@ def seccion_tabular():
             df2 = pd.read_csv(f2) if f2.name.endswith('.csv') else pd.read_excel(f2)
             procesar_union(df1, df2, "local")
     else:
-        st.info(f"🔗 Conectando a la base: **{SHEET_BASE_NOMBRE}**")
+        st.info(f"🔗 Base vinculada: **{SHEET_BASE_NOMBRE}**")
         f_origen = st.file_uploader("Subir archivo con datos nuevos para añadir:", type=['csv', 'xlsx'])
         if f_origen:
-            with st.spinner("Sincronizando con Google Drive..."):
+            with st.spinner("Accediendo a la base de datos en la nube..."):
                 sheet = conectar_google_sheets(SHEET_BASE_NOMBRE)
                 if sheet:
-                    # Traer datos actuales de Drive
+                    # Extraer datos y limpiar encabezados
                     data = sheet.get_all_records()
                     if not data:
-                        st.error("La hoja de cálculo parece estar vacía (sin encabezados).")
+                        st.warning("⚠️ La base de datos en Drive parece no tener datos o encabezados.")
                         return
                     df_base = pd.DataFrame(data)
-                    # Leer archivo nuevo
                     df_nuevo = pd.read_csv(f_origen) if f_origen.name.endswith('.csv') else pd.read_excel(f_origen)
                     procesar_union(df_base, df_nuevo, "google", sheet)
 
@@ -114,78 +113,67 @@ def procesar_union(df1, df2, destino, sheet_obj=None):
     k1 = c_keys[0].selectbox("Columna Identificadora en Base:", df1.columns)
     k2 = c_keys[1].selectbox("Columna Identificadora en Datos Nuevos:", df2.columns)
     
-    cols = st.multiselect("Columnas a extraer del archivo nuevo:", [c for c in df2.columns if c != k2])
+    cols = st.multiselect("Columnas a añadir del archivo nuevo:", [c for c in df2.columns if c != k2])
     
     if st.button("🚀 Ejecutar Procesamiento"):
         if not cols:
             st.warning("Selecciona al menos una columna para añadir.")
         else:
-            # Realizar el Cruce (Left Join)
+            # Merge tipo Left Join
             res = pd.merge(df1, df2[[k2] + cols], left_on=k1, right_on=k2, how='left')
             if k1 != k2 and k2 in res.columns:
                 res = res.drop(columns=[k2])
             
-            st.success("¡Cruce realizado con éxito!")
+            st.success("¡Cruce finalizado!")
             st.dataframe(res.head(10))
 
             if destino == "google":
-                with st.spinner("Generando respaldo y subiendo datos..."):
+                with st.spinner("Creando respaldo de seguridad y actualizando Drive..."):
                     ok, msg = crear_respaldo(sheet_obj)
                     if ok:
-                        # Limpiar nulos para evitar errores en Google Sheets
-                        res = res.astype(str).replace(['nan', 'NaN', 'None'], '')
-                        datos_a_subir = [res.columns.values.tolist()] + res.values.tolist()
+                        # Convertir todo a string y quitar nulos para compatibilidad total
+                        res = res.astype(str).replace(['nan', 'NaN', 'None', '<NA>'], '')
+                        datos_finales = [res.columns.values.tolist()] + res.values.tolist()
                         
                         sheet_obj.clear()
-                        sheet_obj.update('A1', datos_a_subir)
+                        sheet_obj.update('A1', datos_finales)
                         
                         st.balloons()
-                        st.success(f"✅ Google Sheets actualizado. Respaldo: {msg}")
+                        st.success(f"✅ Base actualizada con éxito. Respaldo creado: {msg}")
                     else:
-                        st.error(f"❌ Error al respaldar: {msg}")
+                        st.error(f"❌ Error al crear respaldo: {msg}. No se modificó la base por precaución.")
             else:
-                # Descarga Local
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as w:
                     res.to_excel(w, index=False)
-                st.download_button("📥 Descargar Resultado Excel", output.getvalue(), "union_local.xlsx")
+                st.download_button("📥 Descargar Excel", output.getvalue(), "resultado_union.xlsx")
 
 def seccion_documentos():
     st.header("📂 Combinar PDF e Imágenes")
     files = st.file_uploader("Cargar archivos", type=['pdf', 'jpg', 'png', 'jpeg'], accept_multiple_files=True)
-    if files:
-        if st.button("🪄 Generar PDF Unificado"):
-            merger = PdfWriter()
-            for f in files:
-                if f.type == "application/pdf":
-                    merger.append(f)
-                else:
-                    img = Image.open(f).convert("RGB")
-                    img_pdf = io.BytesIO()
-                    img.save(img_pdf, format="PDF")
-                    merger.append(img_pdf)
-            out = io.BytesIO()
-            merger.write(out)
-            st.download_button("📥 Descargar PDF", out.getvalue(), "unificado_udg.pdf")
+    if files and st.button("🪄 Unir en un solo PDF"):
+        merger = PdfWriter()
+        for f in files:
+            if f.type == "application/pdf":
+                merger.append(f)
+            else:
+                img = Image.open(f).convert("RGB")
+                img_pdf = io.BytesIO()
+                img.save(img_pdf, format="PDF")
+                merger.append(img_pdf)
+        out = io.BytesIO()
+        merger.write(out)
+        st.download_button("📥 Descargar PDF", out.getvalue(), "documento_unificado.pdf")
 
-# --- MAIN ---
 def main():
     mostrar_encabezado()
-    t_inicio, t_tablas, t_docs = st.tabs(["🏠 Inicio", "📑 Unión de Tablas", "📂 Combinar Archivos"])
-    
-    with t_inicio:
-        st.markdown("""
-        ### Bienvenido a la Herramienta Institucional
-        Utiliza las pestañas superiores para procesar tus archivos:
-        - **Unión de Tablas:** Cruza información de archivos Excel/CSV con tu base en la nube.
-        - **Combinar Archivos:** Crea un solo PDF a partir de múltiples documentos o fotos.
-        """)
+    tab_inicio, tab_tablas, tab_docs = st.tabs(["🏠 Inicio", "📑 Tablas", "📂 Documentos"])
+    with tab_tablas: seccion_tabular()
+    with tab_docs: seccion_documentos()
+    with tab_inicio:
+        st.info("Utiliza la pestaña 'Tablas' para conectar con Google Drive y cruzar datos.")
 
-    with t_tablas:
-        seccion_tabular()
-        
-    with t_docs:
-        seccion_documentos()
-
+if __name__ == "__main__":
+    main()
 if __name__ == "__main__":
     main()
