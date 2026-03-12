@@ -8,9 +8,14 @@ import gspread
 import datetime
 from oauth2client.service_account import ServiceAccountCredentials
 
-# 1. CONFIGURACIÓN ÚNICA (Solo una vez al inicio)
-if 'iniciado' not in st.session_state:
-    st.session_state.iniciado = True
+# 1. CONFIGURACIÓN DE PÁGINA
+if 'config_ok' not in st.session_state:
+    st.set_page_config(page_title="Unión de Datos - UdeG", page_icon="📊", layout="wide")
+    st.session_state.config_ok = True
+
+# --- VARIABLES GLOBALES ---
+SHEET_BASE_NOMBRE = "Acredita-Bach-base"
+ID_CARPETA_RESPALDO = "1iRI4ug3fQEOnA_UeKUaXcM98mEQsaQCg"
 
 # --- FUNCIONES ---
 def conectar_google(nombre_archivo):
@@ -20,93 +25,116 @@ def conectar_google(nombre_archivo):
             creds_dict = dict(st.secrets["google_creds"])
             creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-        elif os.path.exists('credentials.json'):
-            creds = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
         else:
+            st.error("❌ No se encontraron los Secrets en Streamlit.")
             return None
+        
         client = gspread.authorize(creds)
+        # Intentamos abrir el archivo (Debe ser formato Google Sheets nativo)
         return client.open(nombre_archivo).get_worksheet(0)
     except Exception as e:
-        st.error(f"Error conexión: {e}")
+        if "200" in str(e):
+            return client.open(nombre_archivo).get_worksheet(0)
+        st.error(f"Error de conexión: {e}")
         return None
 
 def respaldar(sheet_obj):
     try:
         fecha = datetime.datetime.now().strftime("%Y%m%d_%H%M")
-        nombre = f"Backup_{fecha}_Base"
-        sheet_obj.client.copy(sheet_obj.spreadsheet.id, title=nombre)
-        return True, nombre
+        nombre_respaldo = f"Backup_{fecha}_{SHEET_BASE_NOMBRE}"
+        
+        # Copia el archivo directamente a tu carpeta compartida
+        # Esto usa TU espacio de almacenamiento
+        sheet_obj.client.copy(
+            sheet_obj.spreadsheet.id, 
+            title=nombre_respaldo, 
+            folder_id=ID_CARPETA_RESPALDO
+        )
+        return True, nombre_respaldo
     except Exception as e:
         return False, str(e)
 
 # --- INTERFAZ ---
-st.title("📊 UDGPlus - Procesador de Datos")
+st.title("📊 Plataforma de Datos UDGPlus")
+st.markdown("---")
 
-tab1, tab2 = st.tabs(["📑 Unión de Tablas", "📂 Unir PDFs"])
+tab1, tab2 = st.tabs(["📑 Unión de Tablas (Drive)", "📂 Unificador de PDFs"])
 
 with tab1:
-    st.header("Gestión de Base de Datos")
-    # Usamos una key dinámica para que nunca se duplique
-    modo = st.radio("Origen de datos:", ["Local", "Google Drive"], key="modo_trabajo_v1")
-
-    if modo == "Local":
-        f1 = st.file_uploader("Base Principal", type=['xlsx', 'csv'], key="up_1")
-        f2 = st.file_uploader("Datos Nuevos", type=['xlsx', 'csv'], key="up_2")
-        
-        if f1 and f2:
-            df1 = pd.read_csv(f1) if f1.name.endswith('.csv') else pd.read_excel(f1)
-            df2 = pd.read_csv(f2) if f2.name.endswith('.csv') else pd.read_excel(f2)
+    st.header("Actualización de Base de Datos")
+    st.info(f"🔗 Conectado a: **{SHEET_BASE_NOMBRE}**")
+    
+    archivo_nuevo = st.file_uploader("Subir archivo con nuevos datos (Excel/CSV):", type=['xlsx', 'csv'], key="up_drive")
+    
+    if archivo_nuevo:
+        with st.spinner("Leyendo base de datos en la nube..."):
+            sheet = conectar_google(SHEET_BASE_NOMBRE)
             
-            c1, c2 = st.columns(2)
-            id1 = c1.selectbox("ID Base", df1.columns, key="id_l1")
-            id2 = c2.selectbox("ID Nuevo", df2.columns, key="id_l2")
-            cols = st.multiselect("Columnas a añadir", [c for c in df2.columns if c != id2], key="cols_l")
-            
-            if st.button("Procesar Local", key="btn_l"):
-                res = pd.merge(df1, df2[[id2] + cols], left_on=id1, right_on=id2, how='left')
-                st.dataframe(res.head())
-                out = io.BytesIO()
-                with pd.ExcelWriter(out) as w: res.to_excel(w, index=False)
-                st.download_button("Descargar", out.getvalue(), "resultado.xlsx")
-
-    else:
-        st.info("Conectado a: Acredita-Bach-base")
-        f_nuevo = st.file_uploader("Subir Excel con nuevos datos", type=['xlsx', 'csv'], key="up_g")
-        
-        if f_nuevo:
-            sheet = conectar_google("Acredita-Bach-base")
             if sheet:
-                df_b = pd.DataFrame(sheet.get_all_records())
-                df_n = pd.read_csv(f_nuevo) if f_nuevo.name.endswith('.csv') else pd.read_excel(f_nuevo)
+                # Obtener datos actuales
+                df_drive = pd.DataFrame(sheet.get_all_records())
+                # Leer archivo subido
+                df_subido = pd.read_csv(archivo_nuevo) if archivo_nuevo.name.endswith('.csv') else pd.read_excel(archivo_nuevo)
                 
-                c1, c2 = st.columns(2)
-                id1 = c1.selectbox("ID Drive", df_b.columns, key="id_g1")
-                id2 = c2.selectbox("ID Subido", df_n.columns, key="id_g2")
-                cols = st.multiselect("Columnas extra", [c for c in df_n.columns if c != id2], key="cols_g")
-                
-                if st.button("Actualizar Drive", key="btn_g"):
-                    res = pd.merge(df_b, df_n[[id2] + cols], left_on=id1, right_on=id2, how='left')
-                    ok, msg = respaldar(sheet)
-                    if ok:
-                        res = res.astype(str).replace(['nan', 'NaN'], '')
-                        sheet.clear()
-                        sheet.update('A1', [res.columns.tolist()] + res.values.tolist())
-                        st.success(f"Listo. Respaldo: {msg}")
-                    else:
-                        st.error(f"Error backup: {msg}")
+                if not df_drive.empty:
+                    col1, col2 = st.columns(2)
+                    id_drive = col1.selectbox("ID en Drive (Columna común):", df_drive.columns, key="id_d")
+                    id_subido = col2.selectbox("ID en archivo subido:", df_subido.columns, key="id_s")
+                    
+                    columnas_extra = st.multiselect(
+                        "Selecciona las columnas que quieres añadir a la base:",
+                        [c for c in df_subido.columns if c != id_subido],
+                        key="cols_e"
+                    )
+                    
+                    if st.button("🚀 Actualizar Base en Drive", key="btn_actualizar"):
+                        if not columnas_extra:
+                            st.warning("Selecciona al menos una columna.")
+                        else:
+                            with st.spinner("Procesando y creando respaldo..."):
+                                # 1. Hacer el cruce
+                                resultado = pd.merge(df_drive, df_subido[[id_subido] + columnas_extra], 
+                                                    left_on=id_drive, right_on=id_subido, how='left')
+                                if id_drive != id_subido:
+                                    resultado = resultado.drop(columns=[id_subido])
+                                
+                                # 2. Respaldar en la carpeta nueva
+                                exito_r, msg_r = respaldar(sheet)
+                                
+                                if exito_r:
+                                    # 3. Limpiar y subir
+                                    resultado = resultado.astype(str).replace(['nan', 'NaN', 'None'], '')
+                                    datos_lista = [resultado.columns.tolist()] + resultado.values.tolist()
+                                    
+                                    sheet.clear()
+                                    sheet.update('A1', datos_lista)
+                                    
+                                    st.success(f"✅ ¡Base actualizada! Respaldo guardado en tu carpeta como: {msg_r}")
+                                    st.balloons()
+                                    st.dataframe(resultado.head())
+                                else:
+                                    st.error(f"❌ Error al crear respaldo: {msg_r}. No se modificó la base.")
+                else:
+                    st.error("La base en Drive está vacía o no tiene encabezados válidos.")
 
 with tab2:
-    st.header("Unificador de Documentos")
-    archivos = st.file_uploader("PDFs o Fotos", accept_multiple_files=True, key="up_pdf")
-    if archivos and st.button("Combinar", key="btn_pdf"):
+    st.header("Combinar Documentos")
+    pdfs = st.file_uploader("Sube tus PDFs o Imágenes:", accept_multiple_files=True, key="up_pdf_unir")
+    
+    if pdfs and st.button("🪄 Generar PDF Unificado", key="btn_pdf_unir"):
         merger = PdfWriter()
-        for a in archivos:
-            if a.type == "application/pdf": merger.append(a)
+        for p in pdfs:
+            if p.type == "application/pdf":
+                merger.append(p)
             else:
-                img = Image.open(a).convert("RGB")
+                img = Image.open(p).convert("RGB")
                 img_io = io.BytesIO()
                 img.save(img_io, format="PDF")
                 merger.append(img_io)
-        out_p = io.BytesIO()
-        merger.write(out_p)
-        st.download_button("Descargar PDF", out_p.getvalue(), "unido.pdf")
+        
+        output_pdf = io.BytesIO()
+        merger.write(output_pdf)
+        st.download_button("📥 Descargar PDF Final", output_pdf.getvalue(), "unificado_udg.pdf")
+
+st.sidebar.markdown("---")
+st.sidebar.caption("UDGPlus - Unidad de Educación Continua")
