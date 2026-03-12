@@ -1,5 +1,7 @@
-streamlit
+gspread
+oauth2client
 pandas
-openpyxl
+streamlit
 pypdf
 Pillow
+openpyxl
