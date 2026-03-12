@@ -8,157 +8,105 @@ import gspread
 import datetime
 from oauth2client.service_account import ServiceAccountCredentials
 
-# --- CONFIGURACIÓN DE PÁGINA ---
-# Debe ser SIEMPRE la primera instrucción de Streamlit
-if 'config_ejecutada' not in st.session_state:
-    st.set_page_config(
-        page_title="Unión de Datos - UdeG", 
-        page_icon="📊",
-        layout="wide"
-    )
-    st.session_state.config_ejecutada = True
+# 1. CONFIGURACIÓN ÚNICA (Solo una vez al inicio)
+if 'iniciado' not in st.session_state:
+    st.session_state.iniciado = True
 
-# --- VARIABLES GLOBALES ---
-SHEET_BASE_NOMBRE = "Acredita-Bach-base"
-
-# --- FUNCIONES DE SOPORTE ---
-def conectar_google_sheets(nombre_archivo):
+# --- FUNCIONES ---
+def conectar_google(nombre_archivo):
     try:
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        
         if "google_creds" in st.secrets:
             creds_dict = dict(st.secrets["google_creds"])
-            if "private_key" in creds_dict:
-                creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         elif os.path.exists('credentials.json'):
             creds = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
         else:
-            st.error("❌ No se encontraron credenciales.")
             return None
-            
         client = gspread.authorize(creds)
-        try:
-            return client.open(nombre_archivo).get_worksheet(0)
-        except Exception as e:
-            if "200" in str(e):
-                return client.open(nombre_archivo).get_worksheet(0)
-            st.error(f"❌ Error al abrir archivo: {e}")
-            return None
+        return client.open(nombre_archivo).get_worksheet(0)
     except Exception as e:
-        st.error(f"❌ Error crítico: {e}")
+        st.error(f"Error conexión: {e}")
         return None
 
-def crear_respaldo(sheet_obj):
+def respaldar(sheet_obj):
     try:
-        client = sheet_obj.client
-        fecha = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
-        nombre_copia = f"{SHEET_BASE_NOMBRE}_BACKUP_{fecha}"
-        client.copy(sheet_obj.spreadsheet.id, title=nombre_copia)
-        return True, nombre_copia
+        fecha = datetime.datetime.now().strftime("%Y%m%d_%H%M")
+        nombre = f"Backup_{fecha}_Base"
+        sheet_obj.client.copy(sheet_obj.spreadsheet.id, title=nombre)
+        return True, nombre
     except Exception as e:
         return False, str(e)
 
-def mostrar_encabezado():
-    col1, col2 = st.columns([1, 5])
-    logo_final = "logo_u.png" if os.path.exists("logo_u.png") else None
-    with col1:
-        if logo_final: st.image(logo_final, width=150)
-    with col2:
-        st.title("Plataforma de Procesamiento de Datos UDGPlus")
-        st.subheader("Unidad de Educación Continua Virtual")
+# --- INTERFAZ ---
+st.title("📊 UDGPlus - Procesador de Datos")
 
-# --- SECCIONES ---
-def seccion_tabular():
-    st.header("📑 Unión de Archivos Tabulados")
-    # Añadimos un 'key' único para evitar el error de DuplicateElementId
-    modo = st.radio("Selecciona el modo de trabajo:", 
-                    ["Local (Manual)", "Google Sheets Bridge (Auto)"], 
-                    horizontal=True,
-                    key="selector_modo_principal")
+tab1, tab2 = st.tabs(["📑 Unión de Tablas", "📂 Unir PDFs"])
 
-    if modo == "Local (Manual)":
-        c1, c2 = st.columns(2)
-        f1 = c1.file_uploader("Archivo Base", type=['csv', 'xlsx'], key="file_base_local")
-        f2 = c2.file_uploader("Datos a añadir", type=['csv', 'xlsx'], key="file_nuevo_local")
+with tab1:
+    st.header("Gestión de Base de Datos")
+    # Usamos una key dinámica para que nunca se duplique
+    modo = st.radio("Origen de datos:", ["Local", "Google Drive"], key="modo_trabajo_v1")
+
+    if modo == "Local":
+        f1 = st.file_uploader("Base Principal", type=['xlsx', 'csv'], key="up_1")
+        f2 = st.file_uploader("Datos Nuevos", type=['xlsx', 'csv'], key="up_2")
+        
         if f1 and f2:
             df1 = pd.read_csv(f1) if f1.name.endswith('.csv') else pd.read_excel(f1)
             df2 = pd.read_csv(f2) if f2.name.endswith('.csv') else pd.read_excel(f2)
-            procesar_union(df1, df2, "local")
-    else:
-        st.info(f"🔗 Base vinculada: **{SHEET_BASE_NOMBRE}**")
-        f_origen = st.file_uploader("Subir datos nuevos:", type=['csv', 'xlsx'], key="file_google_upload")
-        if f_origen:
-            with st.spinner("Conectando..."):
-                sheet = conectar_google_sheets(SHEET_BASE_NOMBRE)
-                if sheet:
-                    data = sheet.get_all_records()
-                    if data:
-                        df_base = pd.DataFrame(data)
-                        df_nuevo = pd.read_csv(f_origen) if f_origen.name.endswith('.csv') else pd.read_excel(f_origen)
-                        procesar_union(df_base, df_nuevo, "google", sheet)
-                    else:
-                        st.warning("La hoja en Drive está vacía.")
-
-def procesar_union(df1, df2, destino, sheet_obj=None):
-    st.write("---")
-    c_keys = st.columns(2)
-    k1 = c_keys[0].selectbox("ID Base:", df1.columns, key=f"k1_{destino}")
-    k2 = c_keys[1].selectbox("ID Nuevo:", df2.columns, key=f"k2_{destino}")
-    cols = st.multiselect("Columnas a añadir:", [c for c in df2.columns if c != k2], key=f"cols_{destino}")
-    
-    if st.button("🚀 Procesar Cruce", key=f"btn_{destino}"):
-        if not cols:
-            st.warning("Elige columnas.")
-        else:
-            res = pd.merge(df1, df2[[k2] + cols], left_on=k1, right_on=k2, how='left')
-            if k1 != k2 and k2 in res.columns: res = res.drop(columns=[k2])
-            st.dataframe(res.head(10))
-
-            if destino == "google":
-                with st.spinner("Guardando..."):
-                    ok, msg = crear_respaldo(sheet_obj)
-                    if ok:
-                        res = res.astype(str).replace(['nan', 'NaN', 'None'], '')
-                        sheet_obj.clear()
-                        sheet_obj.update('A1', [res.columns.values.tolist()] + res.values.tolist())
-                        st.success(f"✅ ¡Hecho! Respaldo: {msg}")
-                        st.balloons()
-            else:
+            
+            c1, c2 = st.columns(2)
+            id1 = c1.selectbox("ID Base", df1.columns, key="id_l1")
+            id2 = c2.selectbox("ID Nuevo", df2.columns, key="id_l2")
+            cols = st.multiselect("Columnas a añadir", [c for c in df2.columns if c != id2], key="cols_l")
+            
+            if st.button("Procesar Local", key="btn_l"):
+                res = pd.merge(df1, df2[[id2] + cols], left_on=id1, right_on=id2, how='left')
+                st.dataframe(res.head())
                 out = io.BytesIO()
-                with pd.ExcelWriter(out, engine='openpyxl') as w: res.to_excel(w, index=False)
-                st.download_button("📥 Descargar", out.getvalue(), "resultado.xlsx", key="down_btn")
+                with pd.ExcelWriter(out) as w: res.to_excel(w, index=False)
+                st.download_button("Descargar", out.getvalue(), "resultado.xlsx")
 
-def seccion_documentos():
-    st.header("📂 Combinar PDF e Imágenes")
-    files = st.file_uploader("Archivos", type=['pdf', 'jpg', 'png'], accept_multiple_files=True, key="doc_uploader")
-    if files and st.button("🪄 Unir PDF", key="btn_merge_docs"):
+    else:
+        st.info("Conectado a: Acredita-Bach-base")
+        f_nuevo = st.file_uploader("Subir Excel con nuevos datos", type=['xlsx', 'csv'], key="up_g")
+        
+        if f_nuevo:
+            sheet = conectar_google("Acredita-Bach-base")
+            if sheet:
+                df_b = pd.DataFrame(sheet.get_all_records())
+                df_n = pd.read_csv(f_nuevo) if f_nuevo.name.endswith('.csv') else pd.read_excel(f_nuevo)
+                
+                c1, c2 = st.columns(2)
+                id1 = c1.selectbox("ID Drive", df_b.columns, key="id_g1")
+                id2 = c2.selectbox("ID Subido", df_n.columns, key="id_g2")
+                cols = st.multiselect("Columnas extra", [c for c in df_n.columns if c != id2], key="cols_g")
+                
+                if st.button("Actualizar Drive", key="btn_g"):
+                    res = pd.merge(df_b, df_n[[id2] + cols], left_on=id1, right_on=id2, how='left')
+                    ok, msg = respaldar(sheet)
+                    if ok:
+                        res = res.astype(str).replace(['nan', 'NaN'], '')
+                        sheet.clear()
+                        sheet.update('A1', [res.columns.tolist()] + res.values.tolist())
+                        st.success(f"Listo. Respaldo: {msg}")
+                    else:
+                        st.error(f"Error backup: {msg}")
+
+with tab2:
+    st.header("Unificador de Documentos")
+    archivos = st.file_uploader("PDFs o Fotos", accept_multiple_files=True, key="up_pdf")
+    if archivos and st.button("Combinar", key="btn_pdf"):
         merger = PdfWriter()
-        for f in files:
-            if f.type == "application/pdf": merger.append(f)
+        for a in archivos:
+            if a.type == "application/pdf": merger.append(a)
             else:
-                img = Image.open(f).convert("RGB")
-                img_pdf = io.BytesIO()
-                img.save(img_pdf, format="PDF")
-                merger.append(img_pdf)
-        out = io.BytesIO()
-        merger.write(out)
-        st.download_button("📥 Descargar PDF", out.getvalue(), "unificado.pdf", key="down_docs")
-
-# --- MAIN ---
-def main():
-    mostrar_encabezado()
-    tab_inicio, tab_tablas, tab_docs = st.tabs(["🏠 Inicio", "📑 Tablas", "📂 Documentos"])
-    
-    with tab_inicio:
-        st.write("Bienvenido. Selecciona una pestaña para comenzar.")
-    with tab_tablas: 
-        seccion_tabular()
-    with tab_docs: 
-        seccion_documentos()
-
-if __name__ == "__main__":
-    main()
-    main()
-if __name__ == "__main__":
-    main()
+                img = Image.open(a).convert("RGB")
+                img_io = io.BytesIO()
+                img.save(img_io, format="PDF")
+                merger.append(img_io)
+        out_p = io.BytesIO()
+        merger.write(out_p)
+        st.download_button("Descargar PDF", out_p.getvalue(), "unido.pdf")
