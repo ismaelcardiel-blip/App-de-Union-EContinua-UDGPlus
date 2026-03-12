@@ -5,158 +5,127 @@ from PIL import Image
 import io
 import os
 import gspread
+import datetime
 from oauth2client.service_account import ServiceAccountCredentials
 
-# --- CONFIGURACIÓN DE PÁGINA (SIEMPRE AL PRINCIPIO) ---
+# --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
-    page_title="Unión de Datos y Documentos - UdeG", 
+    page_title="Unión de Datos - UdeG", 
     page_icon="📊",
     layout="wide"
 )
 
-# --- FUNCIÓN DE CONEXIÓN A GOOGLE DRIVE ---
+# --- VARIABLES GLOBALES ---
+SHEET_BASE_NOMBRE = "Acredita-Bach-base"
+
+# --- FUNCIONES DE SOPORTE ---
 def conectar_google_sheets(nombre_archivo):
     try:
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        # El archivo credentials.json debe estar en la misma carpeta
+        if not os.path.exists('credentials.json'):
+            st.error("❌ Archivo 'credentials.json' no encontrado en el repositorio.")
+            return None
         creds = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
         client = gspread.authorize(creds)
-        sheet = client.open(nombre_archivo).get_worksheet(0)
-        return sheet
+        return client.open(nombre_archivo).get_worksheet(0)
     except Exception as e:
-        st.error(f"❌ Error de conexión: Asegúrate de que '{nombre_archivo}' esté compartido con el correo del credentials.json")
-        st.caption(f"Detalle técnico: {e}")
+        st.error(f"❌ Error de conexión: {e}")
         return None
 
-# --- ESTILOS E IMAGEN INSTITUCIONAL ---
+def crear_respaldo(sheet_obj):
+    try:
+        client = sheet_obj.client
+        fecha = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
+        nombre_copia = f"{SHEET_BASE_NOMBRE}_BACKUP_{fecha}"
+        client.copy(sheet_obj.spreadsheet.id, title=nombre_copia)
+        return True, nombre_copia
+    except Exception as e:
+        return False, str(e)
+
 def mostrar_encabezado():
     col1, col2 = st.columns([1, 5])
     posibles_rutas = ["assets/logo_u.png", "logo_u.png"]
     logo_final = next((r for r in posibles_rutas if os.path.exists(r)), None)
-
     with col1:
         if logo_final: st.image(logo_final, width=150)
     with col2:
-        st.title("Plataforma de Procesamiento de Datos y Documentos")
-        st.subheader("Unidad de Educación Continua Virtual y Campus Digital Comunitario UDGPlus")
+        st.title("Plataforma de Procesamiento de Datos UDGPlus")
+        st.subheader("Unidad de Educación Continua Virtual")
 
-# --- LÓGICA: UNIÓN TABULAR ---
+# --- SECCIONES ---
 def seccion_tabular():
     st.header("📑 Unión de Archivos Tabulados")
-    
-    SHEET_BASE_NOMBRE = "Acredita-Bach-base"
-    
-    modo = st.radio("Selecciona el modo de operación:", 
-                    ["Local (Subir 2 archivos)", "Google Sheets Bridge (Puente directo)"],
-                    horizontal=True)
+    modo = st.radio("Modo:", ["Local (Manual)", "Google Sheets Bridge (Auto)"], horizontal=True)
 
-    if modo == "Local (Subir 2 archivos)":
-        col_a, col_b = st.columns(2)
-        with col_a:
-            file_1 = st.file_uploader("1. Archivo Base (Capa destino)", type=['csv', 'xlsx'])
-        with col_b:
-            file_2 = st.file_uploader("2. Archivo a Unir (Capa origen)", type=['csv', 'xlsx'])
-
-        if file_1 and file_2:
-            df1 = pd.read_csv(file_1) if file_1.name.endswith('.csv') else pd.read_excel(file_1)
-            df2 = pd.read_csv(file_2) if file_2.name.endswith('.csv') else pd.read_excel(file_2)
+    if modo == "Local (Manual)":
+        c1, c2 = st.columns(2)
+        f1 = c1.file_uploader("Base", type=['csv', 'xlsx'])
+        f2 = c2.file_uploader("Datos a añadir", type=['csv', 'xlsx'])
+        if f1 and f2:
+            df1 = pd.read_csv(f1) if f1.name.endswith('.csv') else pd.read_excel(f1)
+            df2 = pd.read_csv(f2) if f2.name.endswith('.csv') else pd.read_excel(f2)
             procesar_union(df1, df2, "local")
-
     else:
-        st.info(f"🔗 Conectado automáticamente a la base: **{SHEET_BASE_NOMBRE}**")
-        nombre_sheet = st.text_input("Archivo en Google Drive:", value=SHEET_BASE_NOMBRE)
-        file_origen = st.file_uploader("Subir archivo con datos nuevos (CSV/XLSX):", type=['csv', 'xlsx'])
+        st.info(f"🔗 Base vinculada: **{SHEET_BASE_NOMBRE}**")
+        f_origen = st.file_uploader("Subir archivo con datos nuevos:", type=['csv', 'xlsx'])
+        if f_origen:
+            sheet = conectar_google_sheets(SHEET_BASE_NOMBRE)
+            if sheet:
+                df_base = pd.DataFrame(sheet.get_all_records())
+                df_nuevo = pd.read_csv(f_origen) if f_origen.name.endswith('.csv') else pd.read_excel(f_origen)
+                procesar_union(df_base, df_nuevo, "google", sheet)
 
-        if nombre_sheet and file_origen:
-            with st.spinner("Sincronizando con Google Drive..."):
-                sheet_google = conectar_google_sheets(nombre_sheet)
-                if sheet_google:
-                    df_base = pd.DataFrame(sheet_google.get_all_records())
-                    df_nuevo = pd.read_csv(file_origen) if file_origen.name.endswith('.csv') else pd.read_excel(file_origen)
-                    procesar_union(df_base, df_nuevo, "google", sheet_google)
-
-def procesar_union(df1, df2, tipo_destino, g_sheet_obj=None):
+def procesar_union(df1, df2, destino, sheet_obj=None):
     st.write("---")
-    if df1.empty:
-        st.error("La base de datos está vacía.")
-        return
+    col_keys = st.columns(2)
+    k1 = col_keys[0].selectbox("Columna ID en Base:", df1.columns)
+    k2 = col_keys[1].selectbox("Columna ID en Datos Nuevos:", df2.columns)
+    cols = st.multiselect("Columnas a añadir:", [c for c in df2.columns if c != k2])
 
-    c1, c2 = st.columns(2)
-    key_1 = c1.selectbox("Columna Identificadora en Base:", df1.columns)
-    key_2 = c2.selectbox("Columna Identificadora en Datos Nuevos:", df2.columns)
-    
-    cols_to_add = st.multiselect("Columnas a añadir a la base:", [c for c in df2.columns if c != key_2])
-    
-    if st.button("🚀 Ejecutar Actualización" if tipo_destino == "google" else "🚀 Generar Nuevo Archivo"):
-        if not cols_to_add:
-            st.warning("Selecciona al menos una columna.")
+    if st.button("🚀 Iniciar Proceso"):
+        if not cols:
+            st.warning("Selecciona columnas.")
         else:
-            df2_subset = df2[[key_2] + cols_to_add]
-            resultado = pd.merge(df1, df2_subset, left_on=key_1, right_on=key_2, how='left')
+            res = pd.merge(df1, df2[[k2] + cols], left_on=k1, right_on=k2, how='left')
+            if k1 != k2 and k2 in res.columns: res = res.drop(columns=[k2])
             
-            if key_1 != key_2 and key_2 in resultado.columns:
-                resultado = resultado.drop(columns=[key_2])
-
-            st.success("¡Cruce completado!")
-            st.dataframe(resultado.head(10))
-
-            if tipo_destino == "google":
-                with st.spinner("Subiendo cambios a Drive..."):
-                    # Convertir todo a string para evitar errores de JSON con fechas/nan
-                    resultado = resultado.astype(str).replace('nan', '')
-                    datos_actualizados = [resultado.columns.values.tolist()] + resultado.values.tolist()
-                    g_sheet_obj.clear()
-                    g_sheet_obj.update('A1', datos_actualizados)
-                    st.balloons()
-                    st.success("✅ Google Sheets actualizado correctamente.")
+            st.dataframe(res.head(5))
+            if destino == "google":
+                with st.spinner("Creando respaldo y actualizando..."):
+                    ok, msg = crear_respaldo(sheet_obj)
+                    if ok:
+                        res = res.astype(str).replace('nan', '')
+                        sheet_obj.clear()
+                        sheet_obj.update('A1', [res.columns.values.tolist()] + res.values.tolist())
+                        st.success(f"✅ ¡Hecho! Respaldo creado como: {msg}")
+                        st.balloons()
             else:
                 output = io.BytesIO()
-                with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    resultado.to_excel(writer, index=False)
-                st.download_button("📥 Descargar Resultado", output.getvalue(), "union_resultado.xlsx")
+                with pd.ExcelWriter(output) as w: res.to_excel(w, index=False)
+                st.download_button("📥 Descargar", output.getvalue(), "resultado.xlsx")
 
-# --- LÓGICA: UNIÓN DOCUMENTOS ---
 def seccion_documentos():
-    st.header("📂 Combinar PDF e Imágenes")
-    uploaded_files = st.file_uploader("Carga tus archivos", type=['pdf', 'jpg', 'png', 'jpeg'], accept_multiple_files=True)
-    if uploaded_files:
-        nombre_final = st.text_input("Nombre para el archivo final:", "documento_unificado.pdf")
-        if st.button("🪄 Generar PDF"):
-            merger = PdfWriter()
-            for f in uploaded_files:
-                if f.type == "application/pdf":
-                    merger.append(f)
-                else:
-                    img = Image.open(f).convert("RGB")
-                    img_pdf = io.BytesIO()
-                    img.save(img_pdf, format="PDF")
-                    merger.append(img_pdf)
-            out = io.BytesIO()
-            merger.write(out)
-            st.download_button("📥 Descargar PDF", out.getvalue(), nombre_final)
+    st.header("📂 Combinar PDF")
+    files = st.file_uploader("Archivos", type=['pdf', 'jpg', 'png'], accept_multiple_files=True)
+    if files and st.button("🪄 Unir"):
+        merger = PdfWriter()
+        for f in files:
+            if f.type == "application/pdf": merger.append(f)
+            else:
+                img = Image.open(f).convert("RGB")
+                img_pdf = io.BytesIO()
+                img.save(img_pdf, format="PDF")
+                merger.append(img_pdf)
+        out = io.BytesIO()
+        merger.write(out)
+        st.download_button("📥 Descargar PDF", out.getvalue(), "unificado.pdf")
 
-# --- FUNCIÓN PRINCIPAL ---
+# --- MAIN ---
 def main():
     mostrar_encabezado()
-    tab_inicio, tab_tablas, tab_docs = st.tabs(["🏠 Inicio", "📑 Unión de Tablas", "📂 Combinar Archivos"])
-    
-    with tab_inicio:
-        st.markdown("""
-        ### 🎓 Bienvenido
-        Herramienta para gestión de datos de **Educación Continua UDGPlus**.
-        
-        * **Unión de Tablas:** Conecta con Google Drive o usa archivos locales.
-        * **Combinar Archivos:** Une PDFs e imágenes en un solo documento.
-        """)
-        
-    with tab_tablas:
-        seccion_tabular()
-
-    with tab_docs:
-        seccion_documentos()
-
-    st.sidebar.markdown("---")
-    st.sidebar.caption("© 2026 UdeG - Sistema de Procesamiento.")
+    t1, t2, t3 = st.tabs(["🏠 Inicio", "📑 Tablas", "📂 Documentos"])
+    with t2: seccion_tabular()
+    with t3: seccion_documentos()
 
 if __name__ == "__main__":
     main()
